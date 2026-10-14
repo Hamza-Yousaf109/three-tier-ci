@@ -1,3 +1,6 @@
+
+name: Three-Tier CI
+
 on:
   push:
     branches:
@@ -9,7 +12,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 env:
   AWS_REGION: ap-south-1
@@ -30,8 +32,11 @@ jobs:
         with:
           repository: ${{ env.SOURCE_REPO }}
           path: application
+          # If the source repository is private, configure a read-only
+          # SOURCE_REPO_TOKEN secret and uncomment the next line.
+          # token: ${{ secrets.SOURCE_REPO_TOKEN }}
 
-      - name: Validate Docker build contexts
+      - name: Validate Dockerfiles
         run: |
           set -e
           for dir in src/web src/api src/db; do
@@ -53,9 +58,7 @@ jobs:
           set -e
           for dir in src/api src/web; do
             if [ -f "$dir/package-lock.json" ]; then
-              echo "Installing dependencies in $dir"
               (cd "$dir" && npm ci)
-              echo "Running tests in $dir"
               (cd "$dir" && npm test --if-present)
             else
               echo "No package-lock.json in $dir; skipping npm tests."
@@ -84,7 +87,7 @@ jobs:
             application/src/db
 
       - name: Scan Web image
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: three-tier-web:${{ github.sha }}
           format: table
@@ -93,7 +96,7 @@ jobs:
           exit-code: '1'
 
       - name: Scan API image
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: three-tier-api:${{ github.sha }}
           format: table
@@ -102,7 +105,7 @@ jobs:
           exit-code: '1'
 
       - name: Scan DB migration image
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: three-tier-db:${{ github.sha }}
           format: table
@@ -126,7 +129,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Tag images with full commit SHA
+      - name: Tag images with commit SHA
         if: github.event_name != 'pull_request'
         run: |
           docker tag three-tier-web:$GITHUB_SHA \
@@ -152,4 +155,3 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           docker push "$ECR_REGISTRY/three-tier-db:$GITHUB_SHA"
-
