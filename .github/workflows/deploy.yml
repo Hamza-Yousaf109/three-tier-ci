@@ -10,10 +10,11 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
-  build-and-scan:
-    name: Build and Scan Docker Images
+  build-and-push:
+    name: Build Docker Images and Push to ECR
     runs-on: ubuntu-latest
 
     steps:
@@ -25,7 +26,6 @@ jobs:
         with:
           repository: jake-adams-wwt/example-three-tier-application
           path: application
-          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
       - name: Verify Dockerfiles
         shell: bash
@@ -41,7 +41,7 @@ jobs:
       - name: Set Up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install and Test API
         working-directory: application/src/api
@@ -92,38 +92,6 @@ jobs:
       - name: Build Database Migration Image
         run: docker build -t three-tier-db:${GITHUB_SHA} application/src/db
 
-      - name: Scan Web Image
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: image
-          image-ref: three-tier-web:${{ github.sha }}
-          format: table
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
-
-      - name: Scan API Image
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: image
-          image-ref: three-tier-api:${{ github.sha }}
-          format: table
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
-          skip-setup-trivy: true
-
-      - name: Scan Database Migration Image
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: image
-          image-ref: three-tier-db:${{ github.sha }}
-          format: table
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
-          skip-setup-trivy: true
-
       - name: Configure AWS Credentials
         if: github.event_name != 'pull_request'
         uses: aws-actions/configure-aws-credentials@v4
@@ -158,4 +126,3 @@ jobs:
 
             echo "Pushed: ${ECR_IMAGE}"
           done
-

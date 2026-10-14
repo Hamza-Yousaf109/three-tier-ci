@@ -1,3 +1,4 @@
+
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -12,8 +13,16 @@ RUN npm run build
 FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+
+# npm is not needed to run the Next.js standalone server
+RUN rm -rf /usr/local/lib/node_modules/npm \
+    /usr/local/bin/npm \
+    /usr/local/bin/npx
+
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
+
 EXPOSE 3000
 CMD ["node", "server.js"]
+
