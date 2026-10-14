@@ -3,11 +3,9 @@ name: Three-Tier CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -32,8 +30,8 @@ jobs:
         with:
           repository: ${{ env.SOURCE_REPO }}
           path: application
-          # If the source repository is private, configure a read-only
-          # SOURCE_REPO_TOKEN secret and uncomment the next line.
+          # If the source repository is private, create a read-only
+          # SOURCE_REPO_TOKEN secret and uncomment this line:
           # token: ${{ secrets.SOURCE_REPO_TOKEN }}
 
       - name: Validate Dockerfiles
@@ -45,23 +43,39 @@ jobs:
               exit 1
             }
           done
-          echo "All Dockerfiles found."
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Run available application tests
+      - name: Install dependencies and run available tests
         working-directory: application
+        shell: bash
         run: |
           set -e
+
           for dir in src/api src/web; do
-            if [ -f "$dir/package-lock.json" ]; then
-              (cd "$dir" && npm ci)
-              (cd "$dir" && npm test --if-present)
-            else
+            if [ ! -f "$dir/package.json" ]; then
+              echo "No package.json in $dir; skipping."
+              continue
+            fi
+
+            if [ ! -f "$dir/package-lock.json" ]; then
               echo "No package-lock.json in $dir; skipping npm tests."
+              continue
+            fi
+
+            (cd "$dir" && npm ci)
+
+            TEST_SCRIPT=$(node -p "require('./$dir/package.json').scripts?.test || ''")
+
+            if [ -z "$TEST_SCRIPT" ]; then
+              echo "No test script in $dir; skipping."
+            elif [[ "$TEST_SCRIPT" == *"no test specified"* ]]; then
+              echo "Placeholder test script in $dir; skipping."
+            else
+              (cd "$dir" && npm test)
             fi
           done
 
@@ -70,21 +84,15 @@ jobs:
 
       - name: Build Web image
         run: |
-          docker build \
-            -t three-tier-web:$GITHUB_SHA \
-            application/src/web
+          docker build -t three-tier-web:$GITHUB_SHA application/src/web
 
       - name: Build API image
         run: |
-          docker build \
-            -t three-tier-api:$GITHUB_SHA \
-            application/src/api
+          docker build -t three-tier-api:$GITHUB_SHA application/src/api
 
       - name: Build DB migration image
         run: |
-          docker build \
-            -t three-tier-db:$GITHUB_SHA \
-            application/src/db
+          docker build -t three-tier-db:$GITHUB_SHA application/src/db
 
       - name: Scan Web image
         uses: aquasecurity/trivy-action@v0.33.1
@@ -132,26 +140,13 @@ jobs:
       - name: Tag images with commit SHA
         if: github.event_name != 'pull_request'
         run: |
-          docker tag three-tier-web:$GITHUB_SHA \
-            "$ECR_REGISTRY/three-tier-web:$GITHUB_SHA"
+          for image in three-tier-web three-tier-api three-tier-db; do
+            docker tag "$image:$GITHUB_SHA" "$ECR_REGISTRY/$image:$GITHUB_SHA"
+          done
 
-          docker tag three-tier-api:$GITHUB_SHA \
-            "$ECR_REGISTRY/three-tier-api:$GITHUB_SHA"
-
-          docker tag three-tier-db:$GITHUB_SHA \
-            "$ECR_REGISTRY/three-tier-db:$GITHUB_SHA"
-
-      - name: Push Web image to ECR
+      - name: Push images to ECR
         if: github.event_name != 'pull_request'
         run: |
-          docker push "$ECR_REGISTRY/three-tier-web:$GITHUB_SHA"
-
-      - name: Push API image to ECR
-        if: github.event_name != 'pull_request'
-        run: |
-          docker push "$ECR_REGISTRY/three-tier-api:$GITHUB_SHA"
-
-      - name: Push DB migration image to ECR
-        if: github.event_name != 'pull_request'
-        run: |
-          docker push "$ECR_REGISTRY/three-tier-db:$GITHUB_SHA"
+          for image in three-tier-web three-tier-api three-tier-db; do
+            docker push "$ECR_REGISTRY/$image:$GITHUB_SHA"
+          done
