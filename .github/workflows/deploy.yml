@@ -28,6 +28,7 @@ jobs:
           token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
       - name: Verify Dockerfiles
+        shell: bash
         run: |
           set -e
           for service in web api db; do
@@ -83,27 +84,18 @@ jobs:
           fi
 
       - name: Build Web Image
-        run: |
-          docker build \
-            -t three-tier-web:${GITHUB_SHA} \
-            application/src/web
+        run: docker build -t three-tier-web:${GITHUB_SHA} application/src/web
 
       - name: Build API Image
-        run: |
-          docker build \
-            -t three-tier-api:${GITHUB_SHA} \
-            application/src/api
+        run: docker build -t three-tier-api:${GITHUB_SHA} application/src/api
 
       - name: Build Database Migration Image
-        run: |
-          docker build \
-            -t three-tier-db:${GITHUB_SHA} \
-            application/src/db
+        run: docker build -t three-tier-db:${GITHUB_SHA} application/src/db
 
       - name: Scan Web Image
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
-          version: v0.65.0
+          scan-type: image
           image-ref: three-tier-web:${{ github.sha }}
           format: table
           severity: HIGH,CRITICAL
@@ -111,24 +103,26 @@ jobs:
           exit-code: "1"
 
       - name: Scan API Image
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
-          version: v0.65.0
+          scan-type: image
           image-ref: three-tier-api:${{ github.sha }}
           format: table
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          skip-setup-trivy: true
 
       - name: Scan Database Migration Image
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
-          version: v0.65.0
+          scan-type: image
           image-ref: three-tier-db:${{ github.sha }}
           format: table
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          skip-setup-trivy: true
 
       - name: Configure AWS Credentials
         if: github.event_name != 'pull_request'
@@ -145,12 +139,13 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Tag and Push Images to ECR
+      - name: Push Images to ECR
         if: github.event_name != 'pull_request'
         env:
           AWS_ACCOUNT_ID: "992382771174"
           AWS_REGION: ap-south-1
           IMAGE_TAG: ${{ github.sha }}
+        shell: bash
         run: |
           set -e
 
