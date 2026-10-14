@@ -11,125 +11,133 @@ on:
 permissions:
   contents: read
 
-env:
-  AWS_REGION: ap-south-1
-  ECR_REGISTRY: 992382771174.dkr.ecr.ap-south-1.amazonaws.com
-  SOURCE_REPO: jake-adams-wwt/example-three-tier-application
-
 jobs:
-  ci:
-    name: Test, Build, Scan and Publish
+  build-and-scan:
+    name: Build and Scan Docker Images
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout CI repository
+      - name: Checkout CI Repository
         uses: actions/checkout@v4
 
-      - name: Checkout application source
+      - name: Checkout Application Source
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.SOURCE_REPO }}
+          repository: jake-adams-wwt/example-three-tier-application
           path: application
-          # If the source repository is private, create a read-only
-          # SOURCE_REPO_TOKEN secret and uncomment this line:
-          # token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          token: ${{ secrets.SOURCE_REPO_TOKEN || github.token }}
 
-      - name: Validate Dockerfiles
+      - name: Verify Dockerfiles
         run: |
           set -e
-          for dir in src/web src/api src/db; do
-            test -f "application/$dir/Dockerfile" || {
-              echo "::error::Missing Dockerfile: $dir"
+          for service in web api db; do
+            if [ ! -f "application/src/${service}/Dockerfile" ]; then
+              echo "Missing Dockerfile: application/src/${service}/Dockerfile"
               exit 1
-            }
+            fi
           done
 
-      - name: Set up Node.js
+      - name: Set Up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
-      - name: Install dependencies and run available tests
-        working-directory: application
+      - name: Install and Test API
+        working-directory: application/src/api
         shell: bash
         run: |
-          set -e
+          if [ -f package-lock.json ]; then
+            npm ci
+          elif [ -f package.json ]; then
+            npm install
+          fi
 
-          for dir in src/api src/web; do
-            if [ ! -f "$dir/package.json" ]; then
-              echo "No package.json in $dir; skipping."
-              continue
-            fi
-
-            if [ ! -f "$dir/package-lock.json" ]; then
-              echo "No package-lock.json in $dir; skipping npm tests."
-              continue
-            fi
-
-            (cd "$dir" && npm ci)
-
-            TEST_SCRIPT=$(node -p "require('./$dir/package.json').scripts?.test || ''")
-
-            if [ -z "$TEST_SCRIPT" ]; then
-              echo "No test script in $dir; skipping."
-            elif [[ "$TEST_SCRIPT" == *"no test specified"* ]]; then
-              echo "Placeholder test script in $dir; skipping."
+          if [ -f package.json ]; then
+            TEST_SCRIPT=$(node -p "require('./package.json').scripts?.test || ''")
+            if [ -n "$TEST_SCRIPT" ] && \
+               ! echo "$TEST_SCRIPT" | grep -qi "no test specified"; then
+              npm test
             else
-              (cd "$dir" && npm test)
+              echo "No real API test script configured; skipping tests."
             fi
-          done
+          fi
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Web image
+      - name: Install and Test Web
+        working-directory: application/src/web
+        shell: bash
         run: |
-          docker build -t three-tier-web:$GITHUB_SHA application/src/web
+          if [ -f package-lock.json ]; then
+            npm ci
+          elif [ -f package.json ]; then
+            npm install
+          fi
 
-      - name: Build API image
+          if [ -f package.json ]; then
+            TEST_SCRIPT=$(node -p "require('./package.json').scripts?.test || ''")
+            if [ -n "$TEST_SCRIPT" ] && \
+               ! echo "$TEST_SCRIPT" | grep -qi "no test specified"; then
+              npm test
+            else
+              echo "No real Web test script configured; skipping tests."
+            fi
+          fi
+
+      - name: Build Web Image
         run: |
-          docker build -t three-tier-api:$GITHUB_SHA application/src/api
+          docker build \
+            -t three-tier-web:${GITHUB_SHA} \
+            application/src/web
 
-      - name: Build DB migration image
+      - name: Build API Image
         run: |
-          docker build -t three-tier-db:$GITHUB_SHA application/src/db
+          docker build \
+            -t three-tier-api:${GITHUB_SHA} \
+            application/src/api
 
-      - name: Scan Web image
+      - name: Build Database Migration Image
+        run: |
+          docker build \
+            -t three-tier-db:${GITHUB_SHA} \
+            application/src/db
+
+      - name: Scan Web Image
         uses: aquasecurity/trivy-action@v0.33.1
         with:
+          version: v0.65.0
           image-ref: three-tier-web:${{ github.sha }}
           format: table
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: '1'
+          exit-code: "1"
 
-      - name: Scan API image
+      - name: Scan API Image
         uses: aquasecurity/trivy-action@v0.33.1
         with:
+          version: v0.65.0
           image-ref: three-tier-api:${{ github.sha }}
           format: table
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: '1'
+          exit-code: "1"
 
-      - name: Scan DB migration image
+      - name: Scan Database Migration Image
         uses: aquasecurity/trivy-action@v0.33.1
         with:
+          version: v0.65.0
           image-ref: three-tier-db:${{ github.sha }}
           format: table
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: '1'
+          exit-code: "1"
 
-      - name: Configure AWS credentials using OIDC
+      - name: Configure AWS Credentials
         if: github.event_name != 'pull_request'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: ThreeTierCI
+          aws-region: ap-south-1
 
-      - name: Verify AWS identity
+      - name: Verify AWS Identity
         if: github.event_name != 'pull_request'
         run: aws sts get-caller-identity
 
@@ -137,16 +145,22 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Tag images with commit SHA
+      - name: Tag and Push Images to ECR
         if: github.event_name != 'pull_request'
+        env:
+          AWS_ACCOUNT_ID: "992382771174"
+          AWS_REGION: ap-south-1
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          for image in three-tier-web three-tier-api three-tier-db; do
-            docker tag "$image:$GITHUB_SHA" "$ECR_REGISTRY/$image:$GITHUB_SHA"
+          set -e
+
+          for service in web api db; do
+            LOCAL_IMAGE="three-tier-${service}:${IMAGE_TAG}"
+            ECR_IMAGE="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/three-tier-${service}:${IMAGE_TAG}"
+
+            docker tag "${LOCAL_IMAGE}" "${ECR_IMAGE}"
+            docker push "${ECR_IMAGE}"
+
+            echo "Pushed: ${ECR_IMAGE}"
           done
 
-      - name: Push images to ECR
-        if: github.event_name != 'pull_request'
-        run: |
-          for image in three-tier-web three-tier-api three-tier-db; do
-            docker push "$ECR_REGISTRY/$image:$GITHUB_SHA"
-          done
